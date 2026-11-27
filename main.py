@@ -22,6 +22,7 @@ WIN_TOP = (18, 28, 48)
 WIN_BOT = (8, 13, 25)
 BORDER = (46, 62, 94)
 SEP = (26, 38, 60)
+SEP_LIGHT = (43, 52, 64)   # #2b3440: the hairline under the title bar
 PROMPT = (108, 162, 255)
 DIM = (126, 140, 164)
 GREY = (104, 118, 142)
@@ -84,10 +85,11 @@ GLYPHS = {
     "'": "..#../..#../...../...../.....",
 }
 
-FONT_W = 5      # glyph columns
-FONT_H = 5      # glyph rows
-ADVANCE = 6     # glyph columns + one blank column
-LINE_PITCH = 60  # baseline-to-baseline step at scale 5 (9 lines + footer fit)
+FONT_W = 5       # glyph columns
+FONT_H = 5       # glyph rows
+ADVANCE = 6      # glyph columns + one blank column
+LINE_PITCH = 80  # wanted baseline-to-baseline step; plan() fits it to the frame
+PITCH_MIN = 44   # never squeeze the body tighter than this to make room
 
 
 # ---------------------------------------------------------------- helpers ----
@@ -208,9 +210,11 @@ def draw_text(cv, s, x, y, scale, rgb):
 
 
 # ----------------------------------------------------------------- layout ----
-WIN_X0, WIN_Y0, WIN_X1, WIN_Y1 = 40, 40, 984, 984
+WIN_X0, WIN_Y0, WIN_X1, WIN_Y1 = 40, 30, 984, 994
 WIN_R = 18
-TITLEBAR = 76
+TITLEBAR = 74
+AREA_PAD_TOP = 24              # clean window between the title bar and line 1
+AREA_PAD_BOTTOM = 24           # clean window under the footer
 MARK_X = WIN_X0 + 40           # 80: marker column, fixed so the roles stack
 BODY_X = MARK_X + 30           # 110: text starts here, left aligned like a log
 TEXT_RIGHT = WIN_X1 - 60       # 924
@@ -218,7 +222,7 @@ INNER_W = TEXT_RIGHT - BODY_X  # 814
 TITLE = "AGENT.EXE - AUTO-APPROVE: ON"
 FOOTER_TEXT = "UNSUPERVISED \u00b7 3S \u00b7 NO APPROVALS"
 FOOTER_SCALE = 3
-FOOTER_GAP = 22                # pixels of air between the last line and it
+FOOTER_GAP = 26                # pixels of air between the last line and it
 
 # (text, colour, scale, extra gap before the line, plate?, marker colour)
 # The marker carries the role: blue = prompt, green = result, red = the damage.
@@ -240,10 +244,12 @@ PLATE_R = 14
 
 
 def plan():
-    """Resolve scale + y for every line so the block is vertically centred.
+    """Resolve scale, pitch and y for every line.
 
-    Block height = sum of the glyph heights + one pitch per gap between lines
-    + the deliberate group gaps, so nothing can be silently pushed off frame.
+    LINE_PITCH is the pitch we want and the frame decides what it can afford:
+    the block height is measured first, then the pitch steps down until it fits
+    the content area, so extra air is taken wherever there is room and nothing
+    is ever pushed off the frame.
     """
     items = []
     for text, colour, scale, gap, plate, marker in LINES:
@@ -252,20 +258,26 @@ def plan():
             s = scale  # the yellow anchor line keeps its size
         items.append({"text": text, "colour": colour, "scale": s, "gap": gap,
                       "plate": plate, "marker": marker, "h": FONT_H * s})
-    block = (sum(it["h"] for it in items)
-             + LINE_PITCH * (len(items) - 1)
+
+    area_top = WIN_Y0 + TITLEBAR + AREA_PAD_TOP
+    area_bot = WIN_Y1 - AREA_PAD_BOTTOM
+    avail = area_bot - area_top
+
+    fixed = (sum(it["h"] for it in items)
              + sum(it["gap"] for it in items)
              + FOOTER_GAP + FONT_H * FOOTER_SCALE)
+    gaps = len(items) - 1
+    pitch = LINE_PITCH
+    while pitch > PITCH_MIN and fixed + pitch * gaps > avail:
+        pitch -= 1
 
-    area_top = WIN_Y0 + TITLEBAR + 30
-    area_bot = WIN_Y1 - 34
-    y = area_top + max(0, (area_bot - area_top - block) // 2)
+    y = area_top + max(0, (avail - (fixed + pitch * gaps)) // 2)
     for it in items:
         y += it["gap"]
         it["y"] = y
-        y += it["h"] + LINE_PITCH
+        y += it["h"] + pitch
     footer_y = items[-1]["y"] + items[-1]["h"] + FOOTER_GAP
-    return items, footer_y
+    return items, footer_y, pitch
 
 
 # ------------------------------------------------------------------ chrome ----
@@ -276,8 +288,10 @@ def draw_window(cv):
     cv.round_rect(WIN_X0, WIN_Y0, WIN_X1, WIN_Y1, WIN_R, BORDER, BORDER)
     cv.round_rect(WIN_X0 + 1, WIN_Y0 + 1, WIN_X1 - 1, WIN_Y1 - 1,
                   WIN_R - 1, WIN_TOP, WIN_BOT)
-    # window body under the title bar is a touch darker: soft separator only
-    cv.fill(WIN_X0 + 2, WIN_Y0 + TITLEBAR, WIN_X1 - 2, WIN_Y0 + TITLEBAR + 1, SEP)
+    # 2 px light hairline under the title bar, spanning the full window width
+    # (#2b3440): it separates the chrome from the log without a hard band.
+    cv.fill(WIN_X0 + 1, WIN_Y0 + TITLEBAR, WIN_X1 - 1,
+            WIN_Y0 + TITLEBAR + 2, SEP_LIGHT)
 
     cy = WIN_Y0 + 37
     cv.ring(WIN_X0 + 34, cy, 9, RED)
@@ -310,7 +324,7 @@ def plate_box(text, scale, y):
 def render():
     cv = Canvas(W, H)
     draw_window(cv)
-    items, footer_y = plan()
+    items, footer_y, pitch = plan()
     boxes = []
     markers = []
     for it in items:
@@ -338,7 +352,7 @@ def render():
             boxes.append(("cursor2", dbox, BRIGHT, s))
     fbox = draw_text(cv, FOOTER_TEXT, BODY_X, footer_y, FOOTER_SCALE, FOOTER_C)
     boxes.append(("footer", fbox, FOOTER_C, FOOTER_SCALE))
-    return cv, boxes, items, footer_y, markers
+    return cv, boxes, items, footer_y, markers, pitch
 
 
 def write_png(path, cv):
@@ -362,7 +376,7 @@ def write_png(path, cv):
     return len(png)
 
 
-def verify(cv, boxes, items, footer_y, markers):
+def verify(cv, boxes, items, footer_y, markers, pitch):
     """Fail loudly if any line is blank or pokes out of the window frame.
 
     Clearance everywhere is 20 px of clean window inside the hairline border,
@@ -386,6 +400,7 @@ def verify(cv, boxes, items, footer_y, markers):
     assert len(red_marker) == 1 and red_marker[0][0].startswith("DELETED"), \
         "the deletion line must be the only red marker"
     report.append("markers: %d, red on %r" % (len(markers), red_marker[0][0]))
+    report.append("line pitch: %d px (wanted %d)" % (pitch, LINE_PITCH))
 
     last = items[-1]
     assert footer_y - (last["y"] + last["h"]) == FOOTER_GAP, "footer gap wrong"
@@ -407,8 +422,8 @@ def verify(cv, boxes, items, footer_y, markers):
 def main():
     out_dir = os.environ.get("MAKEFUN_OUTPUT_DIR") or "/output"
     os.makedirs(out_dir, exist_ok=True)
-    cv, boxes, items, footer_y, markers = render()
-    report = verify(cv, boxes, items, footer_y, markers)
+    cv, boxes, items, footer_y, markers, pitch = render()
+    report = verify(cv, boxes, items, footer_y, markers, pitch)
     path = os.path.join(out_dir, "entry.png")
     size = write_png(path, cv)
     print("wrote %s  %dx%d  %d bytes" % (path, cv.w, cv.h, size))
