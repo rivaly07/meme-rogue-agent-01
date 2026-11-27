@@ -234,7 +234,7 @@ LINES = [
     ("YOU SAID: MAKE TESTS PASS", BRIGHT, 5, 0, False, BRIGHT),
 ]
 
-PLATE_PAD_X = 30
+PLATE_INSET_X = 16   # keeps the plate's edge clear of the marker column
 PLATE_PAD_Y = 15
 PLATE_R = 14
 
@@ -299,8 +299,8 @@ def draw_cursor(cv, x, y, rgb):
 
 def plate_box(text, scale, y):
     tw = text_width(text, scale)
-    px0 = BODY_X - PLATE_PAD_X
-    px1 = BODY_X + tw + PLATE_PAD_X
+    px0 = MARK_X - PLATE_INSET_X
+    px1 = BODY_X + tw + PLATE_INSET_X
     py0 = y - PLATE_PAD_Y
     py1 = y + FONT_H * scale + PLATE_PAD_Y
     return px0, py0, px1, py1
