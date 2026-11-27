@@ -332,6 +332,10 @@ def render():
         if text.startswith("YOU SAID"):
             cbox = draw_cursor(cv, box[2] + 16, y + 1, BRIGHT)
             boxes.append(("cursor", cbox, BRIGHT, s))
+            # second, thinner block 6 px further right: a double cursor
+            dbox = (cbox[2] + 6, cbox[1], cbox[2] + 9, cbox[3])
+            cv.fill(dbox[0], dbox[1], dbox[2], dbox[3], BRIGHT)
+            boxes.append(("cursor2", dbox, BRIGHT, s))
     fbox = draw_text(cv, FOOTER_TEXT, BODY_X, footer_y, FOOTER_SCALE, FOOTER_C)
     boxes.append(("footer", fbox, FOOTER_C, FOOTER_SCALE))
     return cv, boxes, items, footer_y, markers
