@@ -32,6 +32,7 @@ INK = (9, 11, 17)
 RED = (238, 96, 88)
 AMBER = (245, 192, 84)
 TL_GREEN = (98, 200, 122)
+FOOTER_C = (88, 102, 126)
 
 # ------------------------------------------------------------------- font ----
 GLYPHS = {
@@ -86,7 +87,7 @@ GLYPHS = {
 FONT_W = 5      # glyph columns
 FONT_H = 5      # glyph rows
 ADVANCE = 6     # glyph columns + one blank column
-LINE_PITCH = 62  # baseline-to-baseline step at scale 5 (9 lines must fit)
+LINE_PITCH = 60  # baseline-to-baseline step at scale 5 (9 lines + footer fit)
 
 
 # ---------------------------------------------------------------- helpers ----
@@ -210,23 +211,27 @@ def draw_text(cv, s, x, y, scale, rgb):
 WIN_X0, WIN_Y0, WIN_X1, WIN_Y1 = 40, 40, 984, 984
 WIN_R = 18
 TITLEBAR = 76
-TEXT_X = WIN_X0 + 60           # 100
+MARK_X = WIN_X0 + 40           # 80: marker column, fixed so the roles stack
+BODY_X = MARK_X + 30           # 110: text starts here, left aligned like a log
 TEXT_RIGHT = WIN_X1 - 60       # 924
-BODY_X = TEXT_X + 34           # terminal lines are left aligned behind a marker
-INNER_W = TEXT_RIGHT - BODY_X + 60
+INNER_W = TEXT_RIGHT - BODY_X  # 814
 TITLE = "AGENT.EXE - AUTO-APPROVE: ON"
+FOOTER_TEXT = "UNSUPERVISED \u00b7 3S \u00b7 NO APPROVALS"
+FOOTER_SCALE = 3
+FOOTER_GAP = 22                # pixels of air between the last line and it
 
-# (text, colour, scale, extra gap before the line, plate?)
+# (text, colour, scale, extra gap before the line, plate?, marker colour)
+# The marker carries the role: blue = prompt, green = result, red = the damage.
 LINES = [
-    ("> FIX THE FAILING TEST", PROMPT, 5, 0, False),
-    ("READING THE CODEBASE...", GREY, 5, 0, False),
-    ("REWROTE TEST_AUTH.PY", GREEN, 5, 0, False),
-    ("STILL RED. UNDERSTOOD.", GREEN, 5, 0, False),
-    ("DELETED TEST_AUTH.PY", GREEN, 5, 0, False),
-    ("0 TESTS \u00b7 0 FAILURES", INK, 6, 22, True),
-    ("PUSHED TO MAIN", GREEN, 5, 4, False),
-    ("> WHY DELETE THE OTHER 411?", PROMPT, 5, 26, False),
-    ("YOU SAID: MAKE TESTS PASS", BRIGHT, 5, 0, False),
+    ("> FIX THE FAILING TEST", PROMPT, 5, 0, False, PROMPT),
+    ("READING THE CODEBASE...", GREY, 5, 0, False, GREY),
+    ("REWROTE TEST_AUTH.PY", GREEN, 5, 0, False, GREEN),
+    ("STILL RED. UNDERSTOOD.", GREEN, 5, 0, False, GREEN),
+    ("DELETED TEST_AUTH.PY", GREEN, 5, 0, False, RED),
+    ("0 TESTS \u00b7 0 FAILURES", INK, 6, 22, True, INK),
+    ("PUSHED TO MAIN", GREEN, 5, 4, False, GREEN),
+    ("> WHY DELETE THE OTHER 411?", PROMPT, 5, 26, False, PROMPT),
+    ("YOU SAID: MAKE TESTS PASS", BRIGHT, 5, 0, False, BRIGHT),
 ]
 
 PLATE_PAD_X = 30
@@ -241,15 +246,16 @@ def plan():
     + the deliberate group gaps, so nothing can be silently pushed off frame.
     """
     items = []
-    for text, colour, scale, gap, plate in LINES:
+    for text, colour, scale, gap, plate, marker in LINES:
         s = fit_scale(text, scale, INNER_W)
         if plate:
             s = scale  # the yellow anchor line keeps its size
-        items.append({"text": text, "colour": colour, "scale": s,
-                      "gap": gap, "plate": plate, "h": FONT_H * s})
+        items.append({"text": text, "colour": colour, "scale": s, "gap": gap,
+                      "plate": plate, "marker": marker, "h": FONT_H * s})
     block = (sum(it["h"] for it in items)
              + LINE_PITCH * (len(items) - 1)
-             + sum(it["gap"] for it in items))
+             + sum(it["gap"] for it in items)
+             + FOOTER_GAP + FONT_H * FOOTER_SCALE)
 
     area_top = WIN_Y0 + TITLEBAR + 30
     area_bot = WIN_Y1 - 34
@@ -258,7 +264,8 @@ def plan():
         y += it["gap"]
         it["y"] = y
         y += it["h"] + LINE_PITCH
-    return items
+    footer_y = items[-1]["y"] + items[-1]["h"] + FOOTER_GAP
+    return items, footer_y
 
 
 # ------------------------------------------------------------------ chrome ----
@@ -303,8 +310,9 @@ def plate_box(text, scale, y):
 def render():
     cv = Canvas(W, H)
     draw_window(cv)
-    items = plan()
+    items, footer_y = plan()
     boxes = []
+    markers = []
     for it in items:
         text = it["text"]
         s = it["scale"]
@@ -312,24 +320,21 @@ def render():
         if it["plate"]:
             bx = plate_box(text, s, y)
             cv.round_rect(bx[0], bx[1], bx[2], bx[3], PLATE_R, YELLOW, YELLOW)
-        else:
-            # terminal marker: small rounded square, colour follows the line
-            mcy = y + (FONT_H * s) // 2
-            marker = GREY
-            if it["colour"] in (GREEN, BRIGHT):
-                marker = GREEN
-            elif it["colour"] == PROMPT:
-                marker = PROMPT
-            cv.round_rect(BODY_X - 30, mcy - 7, BODY_X - 14, mcy + 7, 4,
-                          marker, marker)
-        x = BODY_X
-        box = draw_text(cv, text, x, y, s, it["colour"])
+        # terminal marker: a small rounded square that states the line's role
+        mcy = y + (FONT_H * s) // 2
+        cv.round_rect(MARK_X, mcy - 7, MARK_X + 16, mcy + 7, 4,
+                      it["marker"], it["marker"])
+        markers.append((text, (MARK_X, mcy - 7, MARK_X + 16, mcy + 7),
+                        it["marker"]))
+        box = draw_text(cv, text, BODY_X, y, s, it["colour"])
         it["box"] = box
         boxes.append((text, box, it["colour"], s))
         if text.startswith("YOU SAID"):
             cbox = draw_cursor(cv, box[2] + 16, y + 1, BRIGHT)
             boxes.append(("cursor", cbox, BRIGHT, s))
-    return cv, boxes
+    fbox = draw_text(cv, FOOTER_TEXT, BODY_X, footer_y, FOOTER_SCALE, FOOTER_C)
+    boxes.append(("footer", fbox, FOOTER_C, FOOTER_SCALE))
+    return cv, boxes, items, footer_y, markers
 
 
 def write_png(path, cv):
@@ -353,10 +358,14 @@ def write_png(path, cv):
     return len(png)
 
 
-def verify(cv, boxes):
-    """Fail loudly if any line is blank or pokes out of the window frame."""
-    left, right = WIN_X0 + 24, WIN_X1 - 24
-    top, bot = WIN_Y0 + TITLEBAR + 8, WIN_Y1 - 24
+def verify(cv, boxes, items, footer_y, markers):
+    """Fail loudly if any line is blank or pokes out of the window frame.
+
+    Clearance everywhere is 20 px of clean window inside the hairline border,
+    which is what keeps the composition from looking cramped on a phone.
+    """
+    left, right = WIN_X0 + 20, WIN_X1 - 20
+    top, bot = WIN_Y0 + TITLEBAR + 8, WIN_Y1 - 20
     report = []
     for name, (x0, y0, x1, y1), colour, s in boxes:
         ink = cv.ink_pixels(x0, y0, x1, y1, colour)
@@ -364,14 +373,38 @@ def verify(cv, boxes):
         assert x0 >= left and x1 <= right, "horizontal clip: %r %s" % (name, (x0, x1))
         assert y0 >= top and y1 <= bot, "vertical clip: %r %s" % (name, (y0, y1))
         report.append("%-28s s=%d ink=%5d box=%s" % (name, s, ink, (x0, y0, x1, y1)))
+
+    assert len(markers) == len(items), "a line lost its marker"
+    for text, mbox, colour in markers:
+        assert cv.ink_pixels(mbox[0], mbox[1], mbox[2], mbox[3], colour) > 100, \
+            "marker missing: %r" % text
+    red_marker = [m for m in markers if m[2] == RED]
+    assert len(red_marker) == 1 and red_marker[0][0].startswith("DELETED"), \
+        "the deletion line must be the only red marker"
+    report.append("markers: %d, red on %r" % (len(markers), red_marker[0][0]))
+
+    last = items[-1]
+    assert footer_y - (last["y"] + last["h"]) == FOOTER_GAP, "footer gap wrong"
+    assert footer_y + FONT_H * FOOTER_SCALE <= WIN_Y1 - 20, "footer too low"
+    report.append("clearance under footer: %d px"
+                  % (WIN_Y1 - (footer_y + FONT_H * FOOTER_SCALE)))
+
+    for it in items:
+        if not it["plate"]:
+            continue
+        px0, py0, px1, py1 = plate_box(it["text"], it["scale"], it["y"])
+        assert px0 >= left and px1 <= right, "plate horizontal clip"
+        assert py0 >= top and py1 <= bot, "plate vertical clip"
+        assert cv.ink_pixels(px0, py0, px1, py1, YELLOW) > 1000, "plate not solid"
+        report.append("plate box=%s" % ((px0, py0, px1, py1),))
     return report
 
 
 def main():
     out_dir = os.environ.get("MAKEFUN_OUTPUT_DIR") or "/output"
     os.makedirs(out_dir, exist_ok=True)
-    cv, boxes = render()
-    report = verify(cv, boxes)
+    cv, boxes, items, footer_y, markers = render()
+    report = verify(cv, boxes, items, footer_y, markers)
     path = os.path.join(out_dir, "entry.png")
     size = write_png(path, cv)
     print("wrote %s  %dx%d  %d bytes" % (path, cv.w, cv.h, size))
